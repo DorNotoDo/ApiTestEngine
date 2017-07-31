@@ -1,12 +1,13 @@
 import ast
 import hashlib
+import hmac
 import json
 import os.path
 import random
 import re
 import string
-import yaml
 
+import yaml
 from ate.exception import ParamsError
 
 try:
@@ -16,8 +17,9 @@ except NameError:
     string_type = str
     PYTHON_VERSION = 3
 
-variable_regexp = re.compile(r"^\$(\w+)$")
-function_regexp = re.compile(r"^\$\{(\w+)\(([\$\w =,]*)\)\}$")
+SECRET_KEY = "DebugTalk"
+variable_regexp = r"\$([\w_]+)"
+function_regexp = re.compile(r"^\$\{([\w_]+)\(([\$\w_ =,]*)\)\}$")
 
 def gen_random_string(str_len):
     return ''.join(
@@ -26,27 +28,11 @@ def gen_random_string(str_len):
 def gen_md5(*str_args):
     return hashlib.md5("".join(str_args).encode('utf-8')).hexdigest()
 
-def handle_req_data(data):
-
-    if PYTHON_VERSION == 3 and isinstance(data, bytes):
-        # In Python3, convert bytes to str
-        data = data.decode('utf-8')
-
-    if not data:
-        return data
-
-    if isinstance(data, str):
-        # check if data in str can be converted to dict
-        try:
-            data = json.loads(data)
-        except ValueError:
-            pass
-
-    if isinstance(data, dict):
-        # sort data in dict with keys, then convert to str
-        data = json.dumps(data, sort_keys=True)
-
-    return data
+def get_sign(*args):
+    content = ''.join(args).encode('ascii')
+    sign_key = SECRET_KEY.encode('ascii')
+    sign = hmac.new(sign_key, content, hashlib.sha1).hexdigest()
+    return sign
 
 def load_yaml_file(yaml_file):
     with open(yaml_file, 'r+') as stream:
@@ -131,26 +117,45 @@ def load_testcases_by_path(path):
     else:
         return []
 
-def is_variable(content):
-    """ check if content is a variable, which is in format $variable
+def get_contain_variables(content):
+    """ extract all variable names from content, which is in format $variable
     @param (str) content
-    @return (bool) True or False
+    @return (list) variable name list
 
-    e.g. $variable => True
-         abc => False
+    e.g. $variable => ["variable"]
+         /blog/$postid => ["postid"]
+         /$var1/$var2 => ["var1", "var2"]
+         abc => []
     """
-    matched = variable_regexp.match(content)
-    return True if matched else False
+    return re.findall(variable_regexp, content)
 
-def parse_variable(content):
-    """ parse variable name from string content.
+def parse_variables(content, variable_mapping):
+    """ replace all variables of string content with mapping value.
     @param (str) content
-    @return (str) variable name
+    @return (str) parsed content
 
-    e.g. $variable => variable
+    e.g.
+        variable_mapping = {
+            "var_1": "abc",
+            "var_2": "def"
+        }
+        $var_1 => "abc"
+        $var_1#XYZ => "abc#XYZ"
+        /$var_1/$var_2/var3 => "/abc/def/var3"
+        ${func($var_1, $var_2, xyz)} => "${func(abc, def, xyz)}"
     """
-    matched = variable_regexp.match(content)
-    return matched.group(1)
+    variable_name_list = get_contain_variables(content)
+    for variable_name in variable_name_list:
+        variable_value = variable_mapping.get(variable_name)
+        if variable_value is None:
+            raise ParamsError(
+                "%s is not defined in bind variables!" % variable_name)
+
+        content = content.replace(
+            "${}".format(variable_name),
+            variable_value
+        )
+    return content
 
 def is_functon(content):
     """ check if content is a function, which is in format ${func()}

@@ -45,7 +45,7 @@ class Runner(object):
         self.context.import_module_functions(module_functions, level)
 
         variable_binds = config_dict.get('variable_binds', [])
-        self.context.register_variables_config(variable_binds, level)
+        self.context.bind_variables(variable_binds, level)
 
         request_config = config_dict.get('request', {})
         if level == "testset":
@@ -61,6 +61,7 @@ class Runner(object):
         @param (dict) testcase
             {
                 "name": "testcase description",
+                "times": 3,
                 "requires": [],  # optional, override
                 "function_binds": {}, # optional, override
                 "variable_binds": {}, # optional, override
@@ -89,16 +90,19 @@ class Runner(object):
         except KeyError:
             raise exception.ParamsError("URL or METHOD missed!")
 
-        resp = self.http_client_session.request(url=url, method=method, **parsed_request)
-        resp_obj = response.ResponseObject(resp)
-
+        run_times = int(testcase.get("times", 1))
         extract_binds = testcase.get("extract_binds", {})
-        extracted_variables_mapping = resp_obj.extract_response(extract_binds)
-        self.context.bind_extracted_variables(extracted_variables_mapping)
-
         validators = testcase.get("validators", [])
-        diff_content_list = resp_obj.validate(
-            validators, self.context.get_testcase_variables_mapping())
+
+        for _ in range(run_times):
+            resp = self.http_client_session.request(url=url, method=method, **parsed_request)
+            resp_obj = response.ResponseObject(resp)
+
+            extracted_variables_mapping_list = resp_obj.extract_response(extract_binds)
+            self.context.bind_variables(extracted_variables_mapping_list, level="testset")
+
+            diff_content_list = resp_obj.validate(
+                validators, self.context.get_testcase_variables_mapping())
 
         return resp_obj.success, diff_content_list
 
